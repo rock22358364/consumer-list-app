@@ -13,7 +13,7 @@ from xml.etree import ElementTree as ET
 # 固定配置
 # =================================================
 SOURCE_SHEET = "Equipment List"
-TEMPLATE_FILE = os.path.join(os.path.dirname(__file__), "consumer_template.xlsx")
+TEMPLATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "consumer_template.xlsx")
 DATA_START_ROW = 7
 
 SRC_COLS = {
