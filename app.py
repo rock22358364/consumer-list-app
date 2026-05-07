@@ -27,6 +27,7 @@ SRC_COLS = {
     "power": 20,
     "voltage": 21,
     "inquiry_group": 41,
+    "vfd": 49,
 }
 
 # =================================================
@@ -77,6 +78,7 @@ def find_consumer_columns(ws):
         "power_installed": "installedpower",
         "power_rated": "ratedpower",
         "velocity": "ratedspeed",
+        "vfd": "vfd",
     }
 
     result = {}
@@ -90,6 +92,21 @@ def find_consumer_columns(ws):
                 used_cols.add(col)
                 break
     return result
+
+
+def find_vfd_source_col(raw, data_start):
+    """
+    动态查找源文件中 VFD 列的索引。
+    扫描表头区域（data_start 之前的行），找到包含 "VFD" 或 "变频" 的列。
+    """
+    for col_idx in range(raw.shape[1]):
+        for row_idx in range(min(data_start, 10)):
+            val = raw.iloc[row_idx, col_idx]
+            if val is not None and not pd.isna(val):
+                s = str(val).strip().upper()
+                if s == "VFD" or "变频" in str(val):
+                    return col_idx
+    return None
 
 
 def copy_row_style(ws, source_row, target_row, max_col):
@@ -154,6 +171,16 @@ def col_idx_to_letter(col_idx):
 
 def get_excel_cell_ref(excel_row, col_idx_0based):
     return f"{col_idx_to_letter(col_idx_0based)}{excel_row}"
+
+
+def get_vfd_value(val):
+    """获取 VFD 列的有效值"""
+    if val is None:
+        return None
+    s = str(val).strip()
+    if s in ("", "nan", "-", "NA", "N/A"):
+        return None
+    return s
 
 
 def read_strikethrough_from_xlsx(file_obj):
@@ -243,6 +270,7 @@ if uploaded_file:
             engine="calamine",
         )
 
+    # 找到第一行序号为 "1" 的数据起始行
     data_start = None
     for i in range(raw.shape[0]):
         first_val = raw.iloc[i, 0]
@@ -256,6 +284,15 @@ if uploaded_file:
         st.error("❌ Cannot find data start row in Equipment List.")
         st.stop()
 
+    # 动态查找 VFD 列
+    vfd_col_idx = find_vfd_source_col(raw, data_start)
+    if vfd_col_idx is not None:
+        SRC_COLS["vfd"] = vfd_col_idx
+        st.info(f"🔄 VFD column found at source column {col_idx_to_letter(vfd_col_idx)} (index {vfd_col_idx})")
+    else:
+        st.info("ℹ️ No VFD column found in source file.")
+
+    # 提取数据
     df = raw.iloc[data_start:].reset_index(drop=True)
     df = df.dropna(how="all").reset_index(drop=True)
     df = df[df.iloc[:, 0].notna()].reset_index(drop=True)
@@ -278,9 +315,13 @@ if uploaded_file:
             row["power_num"] = to_number(row.get("power"))
             row["voltage_num"] = to_number(row.get("voltage"))
             row["velocity_num"] = to_number(row.get("velocity"))
+            row["vfd_value"] = get_vfd_value(row.get("vfd"))
             filtered_data.append(row)
 
+    vfd_count = sum(1 for r in filtered_data if r.get("vfd_value"))
     st.success(f"✅ **{len(filtered_data)}** motor consumers detected (from {len(df)} total rows)")
+    if vfd_count > 0:
+        st.info(f"🔄 **{vfd_count}** equipment with VFD detected")
 
     with st.expander("📋 Preview motor data"):
         preview_df = pd.DataFrame([
@@ -291,6 +332,7 @@ if uploaded_file:
                 "Power (kW)": r.get("power_num"),
                 "Voltage (V)": r.get("voltage_num"),
                 "Speed (rpm)": r.get("velocity_num"),
+                "VFD": r.get("vfd_value") or "",
             }
             for i, r in enumerate(filtered_data)
         ])
@@ -326,6 +368,13 @@ if uploaded_file:
             unmerge_data_area(ws, DATA_START_ROW)
             col_map = find_consumer_columns(ws)
 
+            missing_cols = set(["industrial_complex", "process_area", "subprocess_area",
+                               "tag_no", "equipment_id", "equipment_name", "pid",
+                               "inquiry_group", "voltage", "power_installed",
+                               "power_rated", "velocity", "vfd"]) - set(col_map)
+            if missing_cols:
+                st.warning(f"Could not match these template columns (will skip): {missing_cols}")
+
             max_col = ws.max_column
             excel_data_start_row = data_start + 1
             r = DATA_START_ROW
@@ -354,6 +403,7 @@ if uploaded_file:
                     "power_installed": (row_data.get("power_num"), SRC_COLS["power"]),
                     "power_rated": (row_data.get("power_num"), SRC_COLS["power"]),
                     "velocity": (row_data.get("velocity_num"), SRC_COLS["velocity"]),
+                    "vfd": (row_data.get("vfd_value"), SRC_COLS.get("vfd")),
                 }
 
                 for field, col_idx in col_map.items():
