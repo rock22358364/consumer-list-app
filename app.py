@@ -7,6 +7,7 @@ from copy import copy
 import re
 import os
 import zipfile
+import time
 from xml.etree import ElementTree as ET
 
 # =================================================
@@ -31,6 +32,78 @@ SRC_COLS = {
 }
 
 # =================================================
+# 多语言文本
+# =================================================
+TEXTS = {
+    "zh": {
+        "title": "⚡ Electrical Consumer List Generator",
+        "subtitle": "从设备清单（Equipment List）中自动提取电气用电设备信息，生成标准化的 Electrical Consumer List。",
+        "rules_title": "📋 使用规则",
+        "rule_1": "源文件基于 [EQP-APAC-TPL-1101-Equipment List](https://covestro.sharepoint.com/:x:/r/sites/002331/_layouts/15/Doc.aspx?sourcedoc=%7BA9768CC5-50DA-419E-BBA0-C9D5BDDBE2CC%7D&file=EQP-APAC-TPL-1101-Equipment%20List.xlsx&action=default&mobileredirect=true&DefaultItemOpen=1%3Fweb%3D1) 模板",
+        "rule_2": "筛选逻辑：功率（Power）或电压（Voltage）列中任意一列有有效数值 → 该行纳入 Consumer List",
+        "rule_3": "以下内容不视为有效数值：`-`、空值、`NA`、`N/A`",
+        "steps_title": "🚀 使用步骤",
+        "step_1": "上传 Equipment List 文件（.xlsx）",
+        "step_2": "系统自动识别电气设备数量，展开 Preview 可预览",
+        "step_3": "点击 **Generate Consumer List**",
+        "step_4": "点击 **Download** 下载结果文件",
+        "notes_title": "⚠️ 注意事项",
+        "note_1": "上传文件不会被服务器保存，关闭页面即清除",
+        "note_2": "建议生成后打开文件核对数据准确性",
+        "upload_label": "上传 Equipment List 文件（.xlsx）",
+        "reading_file": "正在读取文件...",
+        "processing": "正在处理数据...",
+        "generating": "正在生成 Consumer List...",
+        "error_no_data": "❌ 无法找到数据起始行。",
+        "vfd_found": "🔄 VFD 列已识别，位于源文件第 {} 列",
+        "no_vfd": "ℹ️ 源文件中未找到 VFD 列",
+        "motor_detected": "✅ 识别到 **{}** 个电气用电设备（共 {} 行数据）",
+        "vfd_detected": "🔄 其中 **{}** 个设备带 VFD",
+        "strikethrough_detected": "📝 检测到 {} 个带删除线的单元格",
+        "preview_title": "📋 数据预览",
+        "btn_generate": "🚀 生成 Consumer List",
+        "error_no_sheet": "❌ 模板中未找到 Consumer List 工作表。",
+        "warning_missing_cols": "以下模板列未匹配到（将跳过）：{}",
+        "done": "✅ 完成！已写入 **{}** 行数据。",
+        "btn_download": "📥 下载 Consumer List",
+        "upload_hint": "👆 请上传 Equipment List 文件开始使用",
+    },
+    "en": {
+        "title": "⚡ Electrical Consumer List Generator",
+        "subtitle": "Automatically extracts electrical consumer information from the Equipment List and generates a standardized Electrical Consumer List.",
+        "rules_title": "📋 Rules",
+        "rule_1": "Source file must be based on the [EQP-APAC-TPL-1101-Equipment List](https://covestro.sharepoint.com/:x:/r/sites/002331/_layouts/15/Doc.aspx?sourcedoc=%7BA9768CC5-50DA-419E-BBA0-C9D5BDDBE2CC%7D&file=EQP-APAC-TPL-1101-Equipment%20List.xlsx&action=default&mobileredirect=true&DefaultItemOpen=1%3Fweb%3D1) template",
+        "rule_2": "Selection logic: Any row with a valid numeric value in either the Power or Voltage column will be included",
+        "rule_3": "The following are NOT considered valid values: `-`, blank, `NA`, `N/A`",
+        "steps_title": "🚀 How to Use",
+        "step_1": "Upload the Equipment List file (.xlsx)",
+        "step_2": "The system will automatically identify electrical consumers; expand Preview to verify",
+        "step_3": "Click **Generate Consumer List**",
+        "step_4": "Click **Download** to save the output file",
+        "notes_title": "⚠️ Notes",
+        "note_1": "Uploaded files are NOT stored on the server; they are cleared once the page is closed",
+        "note_2": "It is recommended to review the generated file for accuracy after download",
+        "upload_label": "Upload Equipment List (.xlsx)",
+        "reading_file": "Reading file...",
+        "processing": "Processing data...",
+        "generating": "Generating Consumer List...",
+        "error_no_data": "❌ Cannot find data start row.",
+        "vfd_found": "🔄 VFD column found at source column {}",
+        "no_vfd": "ℹ️ No VFD column found in source file.",
+        "motor_detected": "✅ **{}** motor consumers detected (from {} total rows)",
+        "vfd_detected": "🔄 **{}** equipment with VFD detected",
+        "strikethrough_detected": "📝 Detected {} cells with strikethrough formatting",
+        "preview_title": "📋 Preview Data",
+        "btn_generate": "🚀 Generate Consumer List",
+        "error_no_sheet": "❌ Cannot find Consumer List sheet in template.",
+        "warning_missing_cols": "Could not match these template columns (will skip): {}",
+        "done": "✅ Done! **{}** rows written to Consumer List.",
+        "btn_download": "📥 Download Consumer List",
+        "upload_hint": "👆 Please upload an Equipment List file to get started",
+    },
+}
+
+# =================================================
 # 页面配置
 # =================================================
 st.set_page_config(
@@ -39,11 +112,50 @@ st.set_page_config(
     layout="centered",
 )
 
-st.title("⚡ Electrical Consumer List Generator")
-st.markdown("Upload an **Equipment List** (.xlsx) to generate the **Electrical Consumer List** automatically.")
+# 语言切换
+if "lang" not in st.session_state:
+    st.session_state.lang = "zh"
+
+col_title, col_lang = st.columns([5, 1])
+with col_lang:
+    lang_options = {"zh": "中文", "en": "EN"}
+    selected_lang = st.selectbox(
+        "🌐",
+        options=list(lang_options.keys()),
+        format_func=lambda x: lang_options[x],
+        index=0 if st.session_state.lang == "zh" else 1,
+        label_visibility="collapsed",
+    )
+    if selected_lang != st.session_state.lang:
+        st.session_state.lang = selected_lang
+        st.rerun()
+
+T = TEXTS[st.session_state.lang]
+
+with col_title:
+    st.title(T["title"])
+
+st.markdown(T["subtitle"])
+
+# 功能说明折叠区
+with st.expander(T["rules_title"], expanded=False):
+    st.markdown(f"1. {T['rule_1']}")
+    st.markdown(f"2. {T['rule_2']}")
+    st.markdown(f"3. {T['rule_3']}")
+
+with st.expander(T["steps_title"], expanded=False):
+    st.markdown(f"1. {T['step_1']}")
+    st.markdown(f"2. {T['step_2']}")
+    st.markdown(f"3. {T['step_3']}")
+    st.markdown(f"4. {T['step_4']}")
+
+with st.expander(T["notes_title"], expanded=False):
+    st.markdown(f"- {T['note_1']}")
+    st.markdown(f"- {T['note_2']}")
+
 st.divider()
 
-uploaded_file = st.file_uploader("Upload Equipment List (.xlsx)", type=["xlsx"])
+uploaded_file = st.file_uploader(T["upload_label"], type=["xlsx"])
 
 
 # =================================================
@@ -95,10 +207,6 @@ def find_consumer_columns(ws):
 
 
 def find_vfd_source_col(raw, data_start):
-    """
-    动态查找源文件中 VFD 列的索引。
-    扫描表头区域（data_start 之前的行），找到包含 "VFD" 或 "变频" 的列。
-    """
     for col_idx in range(raw.shape[1]):
         for row_idx in range(min(data_start, 10)):
             val = raw.iloc[row_idx, col_idx]
@@ -174,7 +282,6 @@ def get_excel_cell_ref(excel_row, col_idx_0based):
 
 
 def get_vfd_value(val):
-    """获取 VFD 列的有效值"""
     if val is None:
         return None
     s = str(val).strip()
@@ -262,15 +369,17 @@ def read_strikethrough_from_xlsx(file_obj):
 # =================================================
 if uploaded_file:
 
-    with st.spinner("Reading Equipment List..."):
-        raw = pd.read_excel(
-            uploaded_file,
-            sheet_name=SOURCE_SHEET,
-            header=None,
-            engine="calamine",
-        )
+    # ===== 读取文件（带进度条） =====
+    progress_bar = st.progress(0, text=T["reading_file"])
+    raw = pd.read_excel(
+        uploaded_file,
+        sheet_name=SOURCE_SHEET,
+        header=None,
+        engine="calamine",
+    )
+    progress_bar.progress(30, text=T["processing"])
 
-    # 找到第一行序号为 "1" 的数据起始行
+    # 找到数据起始行
     data_start = None
     for i in range(raw.shape[0]):
         first_val = raw.iloc[i, 0]
@@ -281,16 +390,16 @@ if uploaded_file:
                 break
 
     if data_start is None:
-        st.error("❌ Cannot find data start row in Equipment List.")
+        progress_bar.empty()
+        st.error(T["error_no_data"])
         st.stop()
 
     # 动态查找 VFD 列
     vfd_col_idx = find_vfd_source_col(raw, data_start)
     if vfd_col_idx is not None:
         SRC_COLS["vfd"] = vfd_col_idx
-        st.info(f"🔄 VFD column found at source column {col_idx_to_letter(vfd_col_idx)} (index {vfd_col_idx})")
-    else:
-        st.info("ℹ️ No VFD column found in source file.")
+
+    progress_bar.progress(50, text=T["processing"])
 
     # 提取数据
     df = raw.iloc[data_start:].reset_index(drop=True)
@@ -318,12 +427,29 @@ if uploaded_file:
             row["vfd_value"] = get_vfd_value(row.get("vfd"))
             filtered_data.append(row)
 
-    vfd_count = sum(1 for r in filtered_data if r.get("vfd_value"))
-    st.success(f"✅ **{len(filtered_data)}** motor consumers detected (from {len(df)} total rows)")
-    if vfd_count > 0:
-        st.info(f"🔄 **{vfd_count}** equipment with VFD detected")
+    progress_bar.progress(70, text=T["processing"])
 
-    with st.expander("📋 Preview motor data"):
+    # 读取删除线信息
+    strikethrough_cells = read_strikethrough_from_xlsx(uploaded_file)
+
+    progress_bar.progress(100, text="✅")
+    time.sleep(0.5)
+    progress_bar.empty()
+
+    # ===== 显示结果 =====
+    if vfd_col_idx is not None:
+        st.info(T["vfd_found"].format(col_idx_to_letter(vfd_col_idx)))
+    else:
+        st.info(T["no_vfd"])
+
+    vfd_count = sum(1 for r in filtered_data if r.get("vfd_value"))
+    st.success(T["motor_detected"].format(len(filtered_data), len(df)))
+    if vfd_count > 0:
+        st.info(T["vfd_detected"].format(vfd_count))
+    if strikethrough_cells:
+        st.info(T["strikethrough_detected"].format(len(strikethrough_cells)))
+
+    with st.expander(T["preview_title"]):
         preview_df = pd.DataFrame([
             {
                 "No.": i + 1,
@@ -338,112 +464,125 @@ if uploaded_file:
         ])
         st.dataframe(preview_df, use_container_width=True, hide_index=True)
 
-    strikethrough_cells = read_strikethrough_from_xlsx(uploaded_file)
-    if strikethrough_cells:
-        st.info(f"📝 Detected {len(strikethrough_cells)} cells with strikethrough formatting")
-
     st.divider()
 
-    if st.button("🚀 Generate Consumer List", type="primary", use_container_width=True):
+    if st.button(T["btn_generate"], type="primary", use_container_width=True):
 
-        with st.spinner("Generating..."):
-            wb = load_workbook(TEMPLATE_FILE)
+        # ===== 生成文件（带进度条） =====
+        gen_progress = st.progress(0, text=T["generating"])
 
-            target_ws_name = None
+        wb = load_workbook(TEMPLATE_FILE)
+
+        target_ws_name = None
+        for name in wb.sheetnames:
+            if "consumer" in name.lower() and "electrical" in name.lower():
+                target_ws_name = name
+                break
+        if target_ws_name is None:
             for name in wb.sheetnames:
-                if "consumer" in name.lower() and "electrical" in name.lower():
+                if "consumer" in name.lower():
                     target_ws_name = name
                     break
-            if target_ws_name is None:
-                for name in wb.sheetnames:
-                    if "consumer" in name.lower():
-                        target_ws_name = name
-                        break
 
-            if target_ws_name is None:
-                st.error("❌ Cannot find Consumer List sheet in template.")
-                st.stop()
+        if target_ws_name is None:
+            gen_progress.empty()
+            st.error(T["error_no_sheet"])
+            st.stop()
 
-            ws = wb[target_ws_name]
-            unmerge_data_area(ws, DATA_START_ROW)
-            col_map = find_consumer_columns(ws)
+        ws = wb[target_ws_name]
+        unmerge_data_area(ws, DATA_START_ROW)
+        col_map = find_consumer_columns(ws)
 
-            missing_cols = set(["industrial_complex", "process_area", "subprocess_area",
-                               "tag_no", "equipment_id", "equipment_name", "pid",
-                               "inquiry_group", "voltage", "power_installed",
-                               "power_rated", "velocity", "vfd"]) - set(col_map)
-            if missing_cols:
-                st.warning(f"Could not match these template columns (will skip): {missing_cols}")
+        missing_cols = set(["industrial_complex", "process_area", "subprocess_area",
+                           "tag_no", "equipment_id", "equipment_name", "pid",
+                           "inquiry_group", "voltage", "power_installed",
+                           "power_rated", "velocity", "vfd"]) - set(col_map)
+        if missing_cols:
+            st.warning(T["warning_missing_cols"].format(missing_cols))
 
-            max_col = ws.max_column
-            excel_data_start_row = data_start + 1
-            r = DATA_START_ROW
-            sn = 1
+        gen_progress.progress(10, text=T["generating"])
 
-            for row_data in filtered_data:
-                equip_id = build_equipment_id(row_data)
+        max_col = ws.max_column
+        excel_data_start_row = data_start + 1
+        r = DATA_START_ROW
+        sn = 1
+        total_rows = len(filtered_data)
 
-                if r > DATA_START_ROW:
-                    copy_row_style(ws, DATA_START_ROW, r, max_col)
+        for row_idx, row_data in enumerate(filtered_data):
+            equip_id = build_equipment_id(row_data)
 
-                ws.cell(r, 1).value = sn
+            if r > DATA_START_ROW:
+                copy_row_style(ws, DATA_START_ROW, r, max_col)
 
-                src_excel_row = excel_data_start_row + row_data["_df_idx"]
+            ws.cell(r, 1).value = sn
 
-                field_values = {
-                    "industrial_complex": (row_data.get("industrial_complex"), SRC_COLS["industrial_complex"]),
-                    "process_area": (row_data.get("process_area"), SRC_COLS["process_area"]),
-                    "subprocess_area": (row_data.get("subprocess_area"), SRC_COLS["subprocess_area"]),
-                    "tag_no": (row_data.get("tag_no"), SRC_COLS["tag_no"]),
-                    "equipment_id": (equip_id, None),
-                    "equipment_name": (row_data.get("equipment_name"), SRC_COLS["equipment_name"]),
-                    "pid": (row_data.get("pid"), SRC_COLS["pid"]),
-                    "inquiry_group": (row_data.get("inquiry_group"), SRC_COLS["inquiry_group"]),
-                    "voltage": (row_data.get("voltage_num"), SRC_COLS["voltage"]),
-                    "power_installed": (row_data.get("power_num"), SRC_COLS["power"]),
-                    "power_rated": (row_data.get("power_num"), SRC_COLS["power"]),
-                    "velocity": (row_data.get("velocity_num"), SRC_COLS["velocity"]),
-                    "vfd": (row_data.get("vfd_value"), SRC_COLS.get("vfd")),
-                }
+            src_excel_row = excel_data_start_row + row_data["_df_idx"]
 
-                for field, col_idx in col_map.items():
-                    if field not in field_values:
-                        continue
+            field_values = {
+                "industrial_complex": (row_data.get("industrial_complex"), SRC_COLS["industrial_complex"]),
+                "process_area": (row_data.get("process_area"), SRC_COLS["process_area"]),
+                "subprocess_area": (row_data.get("subprocess_area"), SRC_COLS["subprocess_area"]),
+                "tag_no": (row_data.get("tag_no"), SRC_COLS["tag_no"]),
+                "equipment_id": (equip_id, None),
+                "equipment_name": (row_data.get("equipment_name"), SRC_COLS["equipment_name"]),
+                "pid": (row_data.get("pid"), SRC_COLS["pid"]),
+                "inquiry_group": (row_data.get("inquiry_group"), SRC_COLS["inquiry_group"]),
+                "voltage": (row_data.get("voltage_num"), SRC_COLS["voltage"]),
+                "power_installed": (row_data.get("power_num"), SRC_COLS["power"]),
+                "power_rated": (row_data.get("power_num"), SRC_COLS["power"]),
+                "velocity": (row_data.get("velocity_num"), SRC_COLS["velocity"]),
+                "vfd": (row_data.get("vfd_value"), SRC_COLS.get("vfd")),
+            }
 
-                    val, src_col_idx = field_values[field]
+            for field, col_idx in col_map.items():
+                if field not in field_values:
+                    continue
 
-                    if val is None:
-                        continue
-                    if isinstance(val, float) and pd.isna(val):
-                        continue
+                val, src_col_idx = field_values[field]
 
-                    cell = ws.cell(r, col_idx)
-                    cell.value = val
+                if val is None:
+                    continue
+                if isinstance(val, float) and pd.isna(val):
+                    continue
 
-                    if strikethrough_cells and src_col_idx is not None:
-                        cell_ref = get_excel_cell_ref(src_excel_row, src_col_idx)
-                        if cell_ref in strikethrough_cells:
-                            existing_font = cell.font
-                            cell.font = Font(
-                                name=existing_font.name,
-                                size=existing_font.size,
-                                bold=existing_font.bold,
-                                italic=existing_font.italic,
-                                color=existing_font.color,
-                                strikethrough=True,
-                            )
+                cell = ws.cell(r, col_idx)
+                cell.value = val
 
-                r += 1
-                sn += 1
+                if strikethrough_cells and src_col_idx is not None:
+                    cell_ref = get_excel_cell_ref(src_excel_row, src_col_idx)
+                    if cell_ref in strikethrough_cells:
+                        existing_font = cell.font
+                        cell.font = Font(
+                            name=existing_font.name,
+                            size=existing_font.size,
+                            bold=existing_font.bold,
+                            italic=existing_font.italic,
+                            color=existing_font.color,
+                            strikethrough=True,
+                        )
 
-            buf = BytesIO()
-            wb.save(buf)
-            buf.seek(0)
+            r += 1
+            sn += 1
 
-        st.success(f"✅ Done! **{sn - 1}** rows written to Consumer List.")
+            # 更新进度条
+            if total_rows > 0:
+                progress_pct = int(10 + (row_idx + 1) / total_rows * 80)
+                gen_progress.progress(progress_pct, text=T["generating"])
+
+        # 保存文件
+        gen_progress.progress(95, text=T["generating"])
+        buf = BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+
+        gen_progress.progress(100, text="✅")
+        time.sleep(0.5)
+        gen_progress.empty()
+
+        st.success(T["done"].format(sn - 1))
 
         st.download_button(
-            "📥 Download Consumer List",
+            T["btn_download"],
             data=buf,
             file_name="Consumer_List_Generated.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -451,4 +590,4 @@ if uploaded_file:
         )
 
 else:
-    st.info("👆 Please upload an Equipment List file to get started.")
+    st.info(T["upload_hint"])
